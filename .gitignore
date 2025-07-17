@@ -1,0 +1,23 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*.so
+
+# Virtual environment
+.venv/
+
+# Distribution / packaging
+*.egg-info/
+dist/
+build/
+
+# Result/output folders and generated files (but keep folder with .gitkeep)
+result/*
+!result/.gitkeep
+
+video_src/*
+!video_src/.gitkeep
+
+# OS-specific
+.DS_Store
+Thumbs.db
