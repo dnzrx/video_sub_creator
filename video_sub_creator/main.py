@@ -2,7 +2,6 @@ import os
 import warnings
 import subprocess
 from typing import Iterator, Optional
-import concurrent.futures
 
 import whisper
 import numpy as np
@@ -130,14 +129,11 @@ class VideoProcessor:
         video_count = len(video_files)
         print(f"\nFound {video_count} video(s) to process. Starting job...\n")
         
-        with concurrent.futures.ThreadPoolExecutor() as executor:
-            futures = {executor.submit(self._process_single_video, path): path for path in video_files}
-            for future in concurrent.futures.as_completed(futures):
-                try:
-                    future.result()
-                except Exception as e:
-                    video_path = futures[future]
-                    print(f"An unexpected error occurred while processing '{self._get_filename(video_path)}': {e}")
+        for video_path in video_files:
+            try:
+                self._process_single_video(video_path)
+            except Exception as e:
+                print(f"An unexpected error occurred while processing '{self._get_filename(video_path)}': {e}")
         
         print("\nJob finished. All videos processed successfully.")
 
