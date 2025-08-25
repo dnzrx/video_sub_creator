@@ -168,14 +168,22 @@ class VideoProcessor:
         video_count = len(video_queue)
         print(f"\nFound {video_count} video(s) to process. Starting job...\n")
         
+        failed_videos = []
         while video_queue:
             video_info = video_queue.popleft()
             try:
                 self._process_single_video(video_info)
             except Exception as e:
                 print(f"An unexpected error occurred while processing '{video_info.filename}': {e}")
+                failed_videos.append(video_info.filename)
         
-        print("\nJob finished. All videos processed successfully.")
+        print("\nJob finished.")
+        if failed_videos:
+            print("\nThe following videos failed to process:")
+            for video_name in failed_videos:
+                print(f"  - {video_name}")
+        else:
+            print("All videos processed successfully.")
 
 def main():
     processor = VideoProcessor()
