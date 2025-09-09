@@ -4,6 +4,10 @@ import subprocess
 from typing import Iterator, Optional, NamedTuple
 from collections import deque
 from enum import Enum
+import tempfile
+
+from pydub import AudioSegment
+from pydub.silence import detect_nonsilent
 
 import whisper
 import numpy as np
@@ -27,7 +31,11 @@ class ModelSize(Enum):
 
 # Select the model size to use for transcription
 # Options: ModelSize.TINY, ModelSize.BASE, ModelSize.SMALL, ModelSize.MEDIUM, ModelSize.LARGE
-MODEL_NAME = ModelSize.SMALL
+MODEL_NAME = ModelSize.MEDIUM
+
+# Silence splitting parameters
+MIN_SILENCE_LEN = 1500  # ms
+SILENCE_THRESH = -40    # dBFS
 # --- End of Configurable parameters ---
 
 
@@ -81,7 +89,7 @@ class SubtitleGenerator:
                 f.write(f"{i}\n{start} --> {end}\n{text}\n\n")
 
 class VideoProcessor:
-    SUPPORTED_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv")
+    SUPPORTED_EXTENSIONS = (".mp4", ".mov", ".avi", ".mkv", "m4a")
     TRANSCRIBE_ARGS = {
         "task": "transcribe",
         "language": None,
@@ -100,26 +108,36 @@ class VideoProcessor:
                 if f.endswith(self.SUPPORTED_EXTENSIONS):
                     yield os.path.join(root, f)
 
-    def _extract_audio(self, video_info: VideoInfo) -> Optional[np.ndarray]:
+    def _extract_audio(self, video_info: VideoInfo) -> Optional[str]:
         print(f"Processing: {video_info.filename}")
         print("  - Extracting audio...")
+        
+        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+            audio_path = tmp_file.name
+
         try:
             cmd = [
                 "ffmpeg",
                 "-nostdin",
                 "-i", video_info.src_path,
-                "-f", "s16le",
-                "-ac", "1",
-                "-ar", "16000",
-                "-",
+                "-vn", # No video
+                "-acodec", "pcm_s16le", # WAV format
+                "-ac", "1", # Mono
+                "-ar", "16000", # 16kHz sample rate
+                "-y", # Overwrite output file
+                audio_path,
                 "-loglevel", "error"
             ]
-            result = subprocess.run(cmd, capture_output=True, check=True)
-            return np.frombuffer(result.stdout, np.int16).flatten().astype(np.float32) / 32768.0
+            subprocess.run(cmd, check=True)
+            return audio_path
         except subprocess.CalledProcessError as e:
             print(f"  - Error: FFmpeg failed to extract audio. Details below:")
-            print(f"    {e.stderr.decode()}")
+            # print(f"    {e.stderr.decode()}") This is not available with check=True and no capture_output
             return None
+
+    def _convert_segment_to_whisper_format(self, segment: AudioSegment) -> np.ndarray:
+        samples = np.array(segment.get_array_of_samples())
+        return samples.astype(np.float32) / 32768.0
 
     def _load_model(self):
         if self.model is None:
@@ -128,26 +146,75 @@ class VideoProcessor:
             self.model = whisper.load_model(model_name_value)
             print("  - Model loaded successfully.")
 
+    def _generate_segments(self, audio_path: str) -> list[dict]:
+        """
+        Loads audio, detects non-silent parts, transcribes them, and returns subtitle segments.
+        """
+        print("  - Loading audio for segmentation...")
+        with open(audio_path, "rb") as f:
+            audio = AudioSegment.from_file(f, format="wav")
+        
+        print("  - Detecting non-silent parts...")
+        nonsilent_ranges = detect_nonsilent(audio, min_silence_len=MIN_SILENCE_LEN, silence_thresh=SILENCE_THRESH)
+
+        if not nonsilent_ranges:
+            print("  - No non-silent audio detected. Transcribing the whole audio.")
+            audio_data = self._convert_segment_to_whisper_format(audio)
+            
+            if audio_data.size == 0:
+                print("  - Audio is empty after conversion. Skipping.")
+                return []
+
+            warnings.filterwarnings("ignore")
+            result = self.model.transcribe(audio_data, **self.TRANSCRIBE_ARGS)
+            warnings.filterwarnings("default")
+            return result.get("segments", [])
+
+        all_segments = []
+        print(f"  - Transcribing {len(nonsilent_ranges)} audio segments...")
+        for start_ms, end_ms in nonsilent_ranges:
+            chunk = audio[start_ms:end_ms]
+            audio_data = self._convert_segment_to_whisper_format(chunk)
+
+            if audio_data.size == 0:
+                continue
+
+            warnings.filterwarnings("ignore")
+            result = self.model.transcribe(audio_data, **self.TRANSCRIBE_ARGS)
+            warnings.filterwarnings("default")
+
+            if result and "segments" in result and result["segments"]:
+                for seg in result["segments"]:
+                    seg["start"] += start_ms / 1000.0
+                    seg["end"] += start_ms / 1000.0
+                all_segments.extend(result["segments"])
+        
+        return all_segments
+
     def _process_single_video(self, video_info: VideoInfo):
-        audio_data = self._extract_audio(video_info)
-        if audio_data is None:
+        audio_path = self._extract_audio(video_info)
+        if audio_path is None:
             return
-
-        print("  Generating subtitles...")
         
-        warnings.filterwarnings("ignore")
-        result = self.model.transcribe(audio_data, **self.TRANSCRIBE_ARGS)
-        warnings.filterwarnings("default")
+        try:
+            all_segments = self._generate_segments(audio_path)
+            
+            if not all_segments:
+                print("  - Transcription resulted in no segments.")
+                return
 
-        generator = SubtitleGenerator(result["segments"])
+            generator = SubtitleGenerator(all_segments)
 
-        output_dir = os.path.dirname(video_info.output_path_base)
-        os.makedirs(output_dir, exist_ok=True)
-        
-        generator.write_vtt(video_info.vtt_path)
-        generator.write_srt(video_info.srt_path)
-        
-        print(f"  - Subtitles saved: '{video_info.output_path_base}' (.vtt/.srt)")
+            output_dir = os.path.dirname(video_info.output_path_base)
+            os.makedirs(output_dir, exist_ok=True)
+            
+            generator.write_vtt(video_info.vtt_path)
+            generator.write_srt(video_info.srt_path)
+            
+            print(f"  - Subtitles saved: '{video_info.output_path_base}' (.vtt/.srt)")
+        finally:
+            if audio_path and os.path.exists(audio_path):
+                os.remove(audio_path)
 
     def run(self):
         static_ffmpeg.add_paths()

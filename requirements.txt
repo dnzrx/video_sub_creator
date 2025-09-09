@@ -1,3 +1,4 @@
 openai-whisper
 static-ffmpeg
-numpy 
+numpy
+pydub

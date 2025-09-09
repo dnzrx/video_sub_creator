@@ -4,13 +4,13 @@ This project uses OpenAI's Whisper model to automatically generate subtitle file
 
 ## Features
 
--   **Automatic Transcription:** Uses OpenAI's Whisper model to generate accurate subtitles.
+-   **Automatic Transcription:** Uses OpenAI's Whisper model to generate accurate subtitles and automatically detects the language.
+-   **Intelligent Audio Segmentation:** Automatically splits audio by silent passages to improve transcription accuracy and handle long pauses gracefully.
 -   **Recursive Processing:** Scans all subdirectories in the `video_src` folder for videos.
 -   **Mirrored Output Structure:** Replicates the source directory structure in the `result` folder.
--   **Configurable Model:** Easily change the Whisper model size (`tiny`, `base`, `small`, `medium`, `large`) in the `main.py` script.
+-   **Configurable Model:** Easily change the Whisper model size (`tiny`, `base`, `small`, `medium`, `large`).
 -   **Dual Format:** Creates both `.srt` and `.vtt` subtitle files.
 -   **Bundled FFmpeg:** Includes its own version of FFmpeg, so no separate installation is required.
--   **Auto-Language Detection:** Automatically detects the language of the audio.
 
 ## Installation
 
@@ -37,8 +37,8 @@ To get started, you'll need Python 3.9 or newer.
     For example:
     ```python
     # --- Configurable parameters ---
-    VIDEO_SRC_DIR = "my_videos"
-    OUTPUT_DIR = "subtitles"
+    VIDEO_SRC_DIR = "video_src"
+    OUTPUT_DIR = "result"
 
     class ModelSize(Enum):
         """
@@ -52,8 +52,11 @@ To get started, you'll need Python 3.9 or newer.
         LARGE = "large"
 
     # Select the model size to use for transcription
-    # Options: ModelSize.TINY, ModelSize.BASE, ModelSize.SMALL, ModelSize.MEDIUM, ModelSize.LARGE
-    MODEL_NAME = ModelSize.LARGE
+    MODEL_NAME = ModelSize.MEDIUM
+
+    # Silence splitting parameters
+    MIN_SILENCE_LEN = 1500  # ms
+    SILENCE_THRESH = -40    # dBFS
     # --- End of Configurable parameters ---
     ```
 
@@ -62,7 +65,7 @@ To get started, you'll need Python 3.9 or newer.
     video_sub_creator
     ```
 
-The script will automatically detect your hardware and use it for transcription. The generated `.srt` and `.vtt` subtitle files will be saved to the `result` directory, mirroring the structure of `video_src`.
+The generated `.srt` and `.vtt` subtitle files will be saved to the `result` directory, mirroring the structure of `video_src`.
 
 ## License
 
